@@ -17,6 +17,28 @@ from urllib.parse import unquote, urlparse, parse_qs, urlencode
 
 log = logging.getLogger("ytsum")
 
+# Cyrillic to Latin transliteration (Russian + Ukrainian)
+_TRANSLIT_MAP = {
+    "А": "A", "Б": "B", "В": "V", "Г": "G", "Д": "D", "Е": "E", "Ё": "Yo",
+    "Ж": "Zh", "З": "Z", "И": "I", "Й": "Y", "К": "K", "Л": "L", "М": "M",
+    "Н": "N", "О": "O", "П": "P", "Р": "R", "С": "S", "Т": "T", "У": "U",
+    "Ф": "F", "Х": "Kh", "Ц": "Ts", "Ч": "Ch", "Ш": "Sh", "Щ": "Shch",
+    "Ъ": "", "Ы": "Y", "Ь": "", "Э": "E", "Ю": "Yu", "Я": "Ya",
+    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "yo",
+    "ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m",
+    "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u",
+    "ф": "f", "х": "kh", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "shch",
+    "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya",
+    # Ukrainian-specific
+    "Ґ": "G", "ґ": "g", "Є": "Ye", "є": "ye", "І": "I", "і": "i",
+    "Ї": "Yi", "ї": "yi",
+}
+
+
+def transliterate(text):
+    """Transliterate Cyrillic characters to Latin equivalents."""
+    return "".join(_TRANSLIT_MAP.get(ch, ch) for ch in text)
+
 
 def setup_logging(log_path):
     """Log to both console and file."""
@@ -36,9 +58,10 @@ def setup_logging(log_path):
 
 
 def get_output_dir(video_title):
-    """Create per-video folder inside ~/Documents/yt-summaries/."""
+    """Create timestamped per-video folder inside ~/Documents/yt-summaries/."""
     base = Path.home() / "Documents" / "yt-summaries"
-    folder_name = sanitize_filename(video_title)
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M")
+    folder_name = f"{timestamp}_{sanitize_filename(video_title)}"
     video_dir = base / folder_name
     video_dir.mkdir(parents=True, exist_ok=True)
     return video_dir
@@ -57,7 +80,7 @@ def clean_youtube_url(url):
 def get_video_title(url):
     result = subprocess.run(
         ["yt-dlp", "--print", "title", "--skip-download", "--no-warnings", url],
-        capture_output=True, text=True
+        capture_output=True, text=True, encoding="utf-8",
     )
     if result.returncode != 0:
         return None
@@ -68,7 +91,7 @@ def list_available_subs(url):
     """Query yt-dlp for available subs without downloading anything. Returns (manual, auto) lang sets."""
     result = subprocess.run(
         ["yt-dlp", "--list-subs", "--skip-download", "--no-warnings", url],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8",
     )
     output = result.stdout + result.stderr
     log.debug("yt-dlp --list-subs output:\n%s", output)
@@ -135,7 +158,7 @@ def download_subtitles(url, temp_dir):
                 "-o", os.path.join(temp_dir, "subs"),
                 url,
             ],
-            capture_output=True, text=True,
+            capture_output=True, text=True, encoding="utf-8",
         )
 
         log.debug("yt-dlp stdout: %s", result.stdout.strip())
@@ -224,10 +247,14 @@ def clean_vtt(vtt_text):
 
 
 def sanitize_filename(name, max_length=100):
-    sanitized = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name)
-    sanitized = sanitized.strip(". ")
+    """Transliterate Cyrillic, strip invalid filesystem chars, collapse whitespace."""
+    sanitized = transliterate(name)
+    sanitized = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", sanitized)
+    sanitized = re.sub(r"_+", "_", sanitized)
+    sanitized = re.sub(r" +", " ", sanitized)
+    sanitized = sanitized.strip("._ ")
     if len(sanitized) > max_length:
-        sanitized = sanitized[:max_length].rstrip(". ")
+        sanitized = sanitized[:max_length].rstrip("._ ")
     return sanitized
 
 
@@ -305,8 +332,7 @@ def main():
 
     # Set up per-video output folder and log file
     video_dir = get_output_dir(video_title)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_path = video_dir / f"log_{timestamp}.txt"
+    log_path = video_dir / "log.txt"
     setup_logging(log_path)
     log.debug("Video URL: %s", url)
     log.debug("Video title: %s", video_title)
@@ -330,7 +356,7 @@ def main():
         log.info("Transcript: %s chars raw -> %s chars clean (%d%% reduction)",
                  f"{raw_size:,}", f"{clean_size:,}", ratio)
 
-        # Save raw transcript (original VTT converted to text, before dedup)
+        # Save raw transcript (original VTT content)
         raw_path = video_dir / "transcript_raw.txt"
         raw_path.write_text(vtt_text, encoding="utf-8")
         log.info("Raw transcript saved to %s", raw_path)
