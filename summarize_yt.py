@@ -312,6 +312,8 @@ def main():
         filepath = save_summary(video_title, summary)
         print(f"[OK] Summary saved to {filepath} and copied to clipboard")
 
+        os.startfile(filepath)
+
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
