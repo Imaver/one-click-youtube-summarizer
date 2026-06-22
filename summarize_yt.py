@@ -73,19 +73,27 @@ def download_subtitles(url, temp_dir):
     print("  Checking available subtitles...")
     manual_langs, auto_langs = list_available_subs(url)
 
+    matched_manual = [l for l in preferred if l in manual_langs]
+    matched_auto = [l for l in preferred if l in auto_langs]
+
+    if matched_manual:
+        print(f"  Manual subs available: {', '.join(matched_manual)}")
+    if matched_auto:
+        print(f"  Auto-generated subs available: {', '.join(matched_auto)}")
+    if not matched_manual and not matched_auto:
+        print(f"  No matching subtitles found (checked: {', '.join(preferred)})")
+        return None
+
     # Build ordered list of (flag, lang) to try
     candidates = []
     for lang in preferred:
         if lang in manual_langs:
-            candidates.append(("--write-sub", lang))
+            candidates.append(("--write-sub", lang, "manual"))
         if lang in auto_langs:
-            candidates.append(("--write-auto-sub", lang))
+            candidates.append(("--write-auto-sub", lang, "auto"))
 
-    if not candidates:
-        return None
-
-    for flag, lang in candidates:
-        print(f"  Downloading {lang} subtitles...")
+    for i, (flag, lang, sub_type) in enumerate(candidates):
+        print(f"  [{i+1}/{len(candidates)}] Downloading {lang} ({sub_type})...")
         result = subprocess.run(
             [
                 "yt-dlp", flag,
@@ -101,12 +109,19 @@ def download_subtitles(url, temp_dir):
 
         vtt_files = glob.glob(os.path.join(temp_dir, "*.vtt"))
         if vtt_files:
+            print(f"  Got {lang} subtitles")
             return vtt_files[0]
 
-        # Rate-limited — wait before trying next language
-        if "429" in (result.stderr + result.stdout):
-            print("  Rate-limited, waiting 5s before next attempt...")
+        # Show the actual error
+        error_output = (result.stderr + result.stdout).strip()
+        if "429" in error_output:
+            print(f"  Failed: YouTube rate limit (HTTP 429). Waiting 5s...")
             time.sleep(5)
+        elif error_output:
+            last_line = [l for l in error_output.splitlines() if l.strip()][-1]
+            print(f"  Failed: {last_line}")
+        else:
+            print(f"  Failed: no subtitle file written (unknown reason)")
 
     return None
 
@@ -278,6 +293,7 @@ def main():
 
     check_prerequisites()
 
+    print(f"URL: {url}")
     print(f"Fetching video info...")
     video_title = get_video_title(url)
     if not video_title:
@@ -301,7 +317,7 @@ def main():
         ratio = (1 - clean_size / raw_size) * 100 if raw_size else 0
         print(f"Transcript: {raw_size:,} chars raw -> {clean_size:,} chars clean ({ratio:.0f}% reduction)")
 
-        print("Sending to Claude...")
+        print(f"Sending to Claude ({clean_size:,} chars)... this may take a moment")
         summary = send_to_claude(video_title, transcript)
 
         print("\n" + "=" * 60)
