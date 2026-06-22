@@ -7,11 +7,41 @@ sys.stderr.reconfigure(encoding="utf-8")
 import os
 import re
 import glob
+import logging
 import shutil
 import tempfile
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote, urlparse, parse_qs, urlencode
+
+log = logging.getLogger("ytsum")
+
+
+def setup_logging(log_path):
+    """Log to both console and file."""
+    log.setLevel(logging.DEBUG)
+
+    fmt = logging.Formatter("%(asctime)s  %(message)s", datefmt="%H:%M:%S")
+
+    fh = logging.FileHandler(log_path, encoding="utf-8")
+    fh.setLevel(logging.DEBUG)
+    fh.setFormatter(fmt)
+    log.addHandler(fh)
+
+    ch = logging.StreamHandler(sys.stdout)
+    ch.setLevel(logging.INFO)
+    ch.setFormatter(logging.Formatter("%(message)s"))
+    log.addHandler(ch)
+
+
+def get_output_dir(video_title):
+    """Create per-video folder inside ~/Documents/yt-summaries/."""
+    base = Path.home() / "Documents" / "yt-summaries"
+    folder_name = sanitize_filename(video_title)
+    video_dir = base / folder_name
+    video_dir.mkdir(parents=True, exist_ok=True)
+    return video_dir
 
 
 def clean_youtube_url(url):
@@ -41,6 +71,7 @@ def list_available_subs(url):
         capture_output=True, text=True,
     )
     output = result.stdout + result.stderr
+    log.debug("yt-dlp --list-subs output:\n%s", output)
 
     manual_langs = set()
     auto_langs = set()
@@ -70,18 +101,18 @@ def download_subtitles(url, temp_dir):
 
     preferred = ["en", "uk", "ru", "en-orig", "uk-orig", "ru-orig"]
 
-    print("  Checking available subtitles...")
+    log.info("  Checking available subtitles...")
     manual_langs, auto_langs = list_available_subs(url)
 
     matched_manual = [l for l in preferred if l in manual_langs]
     matched_auto = [l for l in preferred if l in auto_langs]
 
     if matched_manual:
-        print(f"  Manual subs available: {', '.join(matched_manual)}")
+        log.info("  Manual subs available: %s", ", ".join(matched_manual))
     if matched_auto:
-        print(f"  Auto-generated subs available: {', '.join(matched_auto)}")
+        log.info("  Auto-generated subs available: %s", ", ".join(matched_auto))
     if not matched_manual and not matched_auto:
-        print(f"  No matching subtitles found (checked: {', '.join(preferred)})")
+        log.info("  No matching subtitles found (checked: %s)", ", ".join(preferred))
         return None
 
     # Build ordered list of (flag, lang) to try
@@ -93,7 +124,7 @@ def download_subtitles(url, temp_dir):
             candidates.append(("--write-auto-sub", lang, "auto"))
 
     for i, (flag, lang, sub_type) in enumerate(candidates):
-        print(f"  [{i+1}/{len(candidates)}] Downloading {lang} ({sub_type})...")
+        log.info("  [%d/%d] Downloading %s (%s)...", i + 1, len(candidates), lang, sub_type)
         result = subprocess.run(
             [
                 "yt-dlp", flag,
@@ -107,21 +138,23 @@ def download_subtitles(url, temp_dir):
             capture_output=True, text=True,
         )
 
+        log.debug("yt-dlp stdout: %s", result.stdout.strip())
+        log.debug("yt-dlp stderr: %s", result.stderr.strip())
+
         vtt_files = glob.glob(os.path.join(temp_dir, "*.vtt"))
         if vtt_files:
-            print(f"  Got {lang} subtitles")
+            log.info("  Got %s subtitles", lang)
             return vtt_files[0]
 
-        # Show the actual error
         error_output = (result.stderr + result.stdout).strip()
         if "429" in error_output:
-            print(f"  Failed: YouTube rate limit (HTTP 429). Waiting 5s...")
+            log.info("  Failed: YouTube rate limit (HTTP 429). Waiting 5s...")
             time.sleep(5)
         elif error_output:
             last_line = [l for l in error_output.splitlines() if l.strip()][-1]
-            print(f"  Failed: {last_line}")
+            log.info("  Failed: %s", last_line)
         else:
-            print(f"  Failed: no subtitle file written (unknown reason)")
+            log.info("  Failed: no subtitle file written (unknown reason)")
 
     return None
 
@@ -151,43 +184,31 @@ def clean_vtt(vtt_text):
             continue
         if timestamp_re.match(line):
             continue
-        # Skip cue identifiers (numeric or contain -->)
         if line.isdigit():
             continue
-        # Remove positioning metadata that sometimes appears on its own line
         cleaned = position_re.sub("", line).strip()
         if not cleaned:
             continue
-        # Strip HTML/VTT tags
         cleaned = tag_re.sub("", cleaned)
         cleaned = cleaned.strip()
         if cleaned:
             text_lines.append(cleaned)
 
-    # Sliding-window deduplication:
-    # Auto-subs show 2 lines at a time, advancing by 1 line each cue.
-    # Result: every line appears twice (or more). Also, a later line may
-    # be a superset of an earlier line (same start, more words appended).
     deduped = []
     for line in text_lines:
         if not deduped:
             deduped.append(line)
             continue
         prev = deduped[-1]
-        # Exact duplicate
         if line == prev:
             continue
-        # Current line is a longer version of previous (sliding window append)
         if line.startswith(prev):
             deduped[-1] = line
             continue
-        # Previous line is a longer version of current (shouldn't happen often, but guard)
         if prev.startswith(line):
             continue
         deduped.append(line)
 
-    # Second pass: remove lines that are fully contained as a suffix of the previous line
-    # (handles the reverse sliding-window overlap)
     final = []
     for line in deduped:
         if final and final[-1].endswith(line):
@@ -198,7 +219,6 @@ def clean_vtt(vtt_text):
         final.append(line)
 
     text = " ".join(final)
-    # Collapse multiple spaces
     text = re.sub(r" {2,}", " ", text)
     return text.strip()
 
@@ -222,11 +242,12 @@ def send_to_claude(video_title, transcript):
         f"{transcript}"
     )
 
-    # Write prompt to a temp file to avoid CLI length limits and encoding issues
     prompt_file = os.path.join(tempfile.gettempdir(), "ytsum_prompt.txt")
     try:
         with open(prompt_file, "w", encoding="utf-8") as f:
             f.write(prompt)
+
+        log.debug("Prompt written to %s (%d chars)", prompt_file, len(prompt))
 
         env = {**os.environ, "PYTHONUTF8": "1"}
         result = subprocess.run(
@@ -237,7 +258,7 @@ def send_to_claude(video_title, transcript):
             env=env,
         )
         if result.returncode != 0:
-            print(f"Error: Claude CLI failed:\n{result.stderr}", file=sys.stderr)
+            log.error("Claude CLI failed (exit %d):\n%s", result.returncode, result.stderr)
             sys.exit(1)
 
         return result.stdout.strip()
@@ -252,32 +273,15 @@ def copy_to_clipboard(text):
         cmd = ["pbcopy"] if platform.system() == "Darwin" else ["clip"]
         subprocess.run(cmd, input=text, text=True, check=True)
     except Exception:
-        pass  # Non-critical
-
-
-def save_summary(video_title, summary):
-    output_dir = Path.home() / "Documents" / "yt-summaries"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    filename = sanitize_filename(video_title) + ".md"
-    filepath = output_dir / filename
-
-    filepath.write_text(
-        f"# {video_title}\n\n{summary}\n",
-        encoding="utf-8",
-    )
-    return filepath
+        pass
 
 
 def check_prerequisites():
     if shutil.which("yt-dlp") is None:
-        print("Error: yt-dlp not found. Install it: pip install yt-dlp", file=sys.stderr)
+        log.error("yt-dlp not found. Install it: pip install yt-dlp")
         sys.exit(1)
     if shutil.which("claude") is None:
-        print(
-            "Error: Claude Code CLI not found.\n"
-            "Install it and log in with your Pro/Max subscription.",
-            file=sys.stderr,
-        )
+        log.error("Claude Code CLI not found. Install it and log in with your Pro/Max subscription.")
         sys.exit(1)
 
 
@@ -287,48 +291,61 @@ def main():
         sys.exit(1)
 
     url = unquote(sys.argv[1].strip())
-    # Strip trailing slashes/whitespace that protocol handlers sometimes add
     url = url.rstrip("/")
     url = clean_youtube_url(url)
 
     check_prerequisites()
 
-    print(f"URL: {url}")
-    print(f"Fetching video info...")
+    log.info("URL: %s", url)
+    log.info("Fetching video info...")
     video_title = get_video_title(url)
     if not video_title:
         video_title = "Unknown Video"
-    print(f"Title: {video_title}")
+    log.info("Title: %s", video_title)
+
+    # Set up per-video output folder and log file
+    video_dir = get_output_dir(video_title)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = video_dir / f"log_{timestamp}.txt"
+    setup_logging(log_path)
+    log.debug("Video URL: %s", url)
+    log.debug("Video title: %s", video_title)
+    log.debug("Output folder: %s", video_dir)
 
     temp_dir = tempfile.mkdtemp(prefix="ytsum_")
     try:
-        print("Downloading subtitles...")
+        log.info("Downloading subtitles...")
         vtt_path = download_subtitles(url, temp_dir)
         if not vtt_path:
-            print("Error: No subtitles found for this video (tried English, Ukrainian, Russian).", file=sys.stderr)
+            log.error("No subtitles found for this video (tried English, Ukrainian, Russian).")
             sys.exit(1)
 
-        print("Cleaning transcript...")
+        log.info("Cleaning transcript...")
         vtt_text = Path(vtt_path).read_text(encoding="utf-8")
         transcript = clean_vtt(vtt_text)
 
         raw_size = len(vtt_text)
         clean_size = len(transcript)
         ratio = (1 - clean_size / raw_size) * 100 if raw_size else 0
-        print(f"Transcript: {raw_size:,} chars raw -> {clean_size:,} chars clean ({ratio:.0f}% reduction)")
+        log.info("Transcript: %s chars raw -> %s chars clean (%d%% reduction)",
+                 f"{raw_size:,}", f"{clean_size:,}", ratio)
 
-        print(f"Sending to Claude ({clean_size:,} chars)... this may take a moment")
+        log.info("Sending to Claude (%s chars)... this may take a moment", f"{clean_size:,}")
         summary = send_to_claude(video_title, transcript)
 
-        print("\n" + "=" * 60)
-        print(summary)
-        print("=" * 60 + "\n")
+        log.info("\n" + "=" * 60)
+        log.info(summary)
+        log.info("=" * 60)
 
         copy_to_clipboard(summary)
-        filepath = save_summary(video_title, summary)
-        print(f"[OK] Summary saved to {filepath} and copied to clipboard")
 
-        os.startfile(filepath)
+        # Save summary .md inside the video folder
+        md_path = video_dir / "summary.md"
+        md_path.write_text(f"# {video_title}\n\n{summary}\n", encoding="utf-8")
+        log.info("[OK] Summary saved to %s and copied to clipboard", md_path)
+        log.info("Log file: %s", log_path)
+
+        os.startfile(md_path)
 
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
