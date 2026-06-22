@@ -119,32 +119,49 @@ def list_available_subs(url):
 
 
 def download_subtitles(url, temp_dir):
-    """List available subs first, then download the best match."""
+    """List available subs first, then download the best match.
+
+    Priority order:
+      1. Manual subs (en, uk, ru) — highest quality, always pre-generated
+      2. Original auto-generated tracks (*-orig) — reliable, no translation API
+      3. Auto-translated tracks (en, uk, ru) — last resort, YouTube translates
+         on-the-fly and may return 429
+    """
     import time
 
-    preferred = ["en", "uk", "ru", "en-orig", "uk-orig", "ru-orig"]
+    manual_pref = ["en", "uk", "ru"]
+    orig_pref = ["en-orig", "uk-orig", "ru-orig"]
+    translated_pref = ["en", "uk", "ru"]
 
     log.info("  Checking available subtitles...")
     manual_langs, auto_langs = list_available_subs(url)
 
-    matched_manual = [l for l in preferred if l in manual_langs]
-    matched_auto = [l for l in preferred if l in auto_langs]
+    matched_manual = [l for l in manual_pref if l in manual_langs]
+    matched_orig = [l for l in orig_pref if l in auto_langs]
+    matched_translated = [l for l in translated_pref if l in auto_langs]
 
     if matched_manual:
         log.info("  Manual subs available: %s", ", ".join(matched_manual))
-    if matched_auto:
-        log.info("  Auto-generated subs available: %s", ", ".join(matched_auto))
-    if not matched_manual and not matched_auto:
-        log.info("  No matching subtitles found (checked: %s)", ", ".join(preferred))
+    if matched_orig:
+        log.info("  Original auto-generated subs: %s", ", ".join(matched_orig))
+    if matched_translated:
+        log.info("  Auto-translated subs: %s", ", ".join(matched_translated))
+    if not matched_manual and not matched_orig and not matched_translated:
+        all_checked = manual_pref + orig_pref + translated_pref
+        log.info("  No matching subtitles found (checked: %s)", ", ".join(dict.fromkeys(all_checked)))
         return None
 
-    # Build ordered list of (flag, lang) to try
+    # Build ordered candidate list: manual first, then originals, then translated
     candidates = []
-    for lang in preferred:
+    for lang in manual_pref:
         if lang in manual_langs:
             candidates.append(("--write-sub", lang, "manual"))
+    for lang in orig_pref:
         if lang in auto_langs:
-            candidates.append(("--write-auto-sub", lang, "auto"))
+            candidates.append(("--write-auto-sub", lang, "original"))
+    for lang in translated_pref:
+        if lang in auto_langs:
+            candidates.append(("--write-auto-sub", lang, "translated"))
 
     for i, (flag, lang, sub_type) in enumerate(candidates):
         log.info("  [%d/%d] Downloading %s (%s)...", i + 1, len(candidates), lang, sub_type)
