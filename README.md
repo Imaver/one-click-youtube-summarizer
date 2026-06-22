@@ -150,6 +150,45 @@ Each file is named after the video title (e.g. `Rick Astley - Never Gonna Give Y
 
 ---
 
+## Install via AI agent
+
+If you use Cursor or Claude Code, you can paste one of the prompts below into your agent. It will install everything automatically and tell you what manual steps remain (like the Tampermonkey browser extension).
+
+### Cursor
+
+Open Cursor in the project folder and paste this into the chat (Agent mode):
+
+```
+I just cloned this repo. Please set it up on my Windows machine:
+
+1. Check that python, yt-dlp, and claude CLI are installed and working. If anything is missing, install it for me or tell me exactly how.
+2. Make sure `claude -p "say hello"` works. If it doesn't, walk me through the Claude Code login.
+3. Run `python setup.py` to register the ytsum:// protocol handler.
+4. Tell me step by step how to install the Tampermonkey userscript in my browser (you can't do this part for me).
+5. After I confirm it's installed, help me test it on a YouTube video.
+```
+
+### Claude Code
+
+Open a terminal in the project folder and run:
+
+```
+claude
+```
+
+Then paste this prompt:
+
+```
+I just cloned this repo. Please set it up on my Windows machine:
+
+1. Check that python, yt-dlp, and claude CLI are installed and working. If anything is missing, install it for me or tell me exactly how.
+2. Run `python setup.py` to register the ytsum:// protocol handler.
+3. Test that the script works by running: python summarize_yt.py "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+4. Tell me step by step how to install the Tampermonkey userscript (tampermonkey.user.js) in my browser — you can't do this part for me.
+```
+
+---
+
 ## Future ideas
 
 Not implemented — just notes for possible enhancements:
