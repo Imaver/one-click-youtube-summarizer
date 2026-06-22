@@ -330,6 +330,16 @@ def main():
         log.info("Transcript: %s chars raw -> %s chars clean (%d%% reduction)",
                  f"{raw_size:,}", f"{clean_size:,}", ratio)
 
+        # Save raw transcript (original VTT converted to text, before dedup)
+        raw_path = video_dir / "transcript_raw.txt"
+        raw_path.write_text(vtt_text, encoding="utf-8")
+        log.info("Raw transcript saved to %s", raw_path)
+
+        # Save cleaned transcript
+        clean_path = video_dir / "transcript_clean.txt"
+        clean_path.write_text(transcript, encoding="utf-8")
+        log.info("Clean transcript saved to %s", clean_path)
+
         log.info("Sending to Claude (%s chars)... this may take a moment", f"{clean_size:,}")
         summary = send_to_claude(video_title, transcript)
 
