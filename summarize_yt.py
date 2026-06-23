@@ -301,7 +301,7 @@ def send_to_claude(video_title, transcript):
 
         env = {**os.environ, "PYTHONUTF8": "1"}
         result = subprocess.run(
-            ["claude", "-p"],
+            ["claude", "-p", "--model", "claude-opus-4-6"],
             stdin=open(prompt_file, "r", encoding="utf-8"),
             capture_output=True, text=True,
             encoding="utf-8",
