@@ -283,11 +283,18 @@ def sanitize_filename(name, max_length=100):
 
 def send_to_claude(video_title, transcript):
     prompt = (
-        f'Here is a transcript of a YouTube video titled "{video_title}".\n\n'
-        "The transcript may be in English, Ukrainian, or Russian. "
-        "Regardless of the original language, always write the summary in English.\n\n"
-        "Give key most important points as bullet list that conveys most important "
+        f'Here is a transcript of a YouTube video titled "{video_title}".\n'
+        "The transcript may be in English, Ukrainian, or Russian.\n"
+        "Regardless of the original language, always write the summary in English.\n"
+        "Give key most important points as bullet list that conveys most important\n"
         "information. Short sentences.\n\n"
+        "Rules:\n"
+        "- Summarize ONLY what the speaker says. Do not add disclaimers,\n"
+        "  fact-check notes, editorial warnings, or meta-commentary about\n"
+        "  the content being opinion, propaganda, biased, or unverified.\n"
+        "- Do not qualify or hedge the speaker's claims. Report them as stated.\n"
+        '- Never add a "Note:" or "Disclaimer:" section at the end.\n'
+        "- You are a transcription summarizer, not a fact-checker.\n"
         "---\n"
         f"{transcript}"
     )
