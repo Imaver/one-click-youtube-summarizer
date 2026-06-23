@@ -77,23 +77,32 @@ def clean_youtube_url(url):
     return url
 
 
-def get_video_title(url):
+def run_ytdlp(*args):
+    """Run yt-dlp and return (stdout, stderr, returncode) with safe UTF-8 decoding."""
     result = subprocess.run(
-        ["yt-dlp", "--print", "title", "--skip-download", "--no-warnings", url],
-        capture_output=True, text=True, encoding="utf-8",
+        list(args),
+        capture_output=True,
     )
-    if result.returncode != 0:
+    stdout = result.stdout.decode("utf-8", errors="replace")
+    stderr = result.stderr.decode("utf-8", errors="replace")
+    return stdout, stderr, result.returncode
+
+
+def get_video_title(url):
+    stdout, stderr, rc = run_ytdlp(
+        "yt-dlp", "--print", "title", "--skip-download", "--no-warnings", url,
+    )
+    if rc != 0:
         return None
-    return result.stdout.strip()
+    return stdout.strip()
 
 
 def list_available_subs(url):
     """Query yt-dlp for available subs without downloading anything. Returns (manual, auto) lang sets."""
-    result = subprocess.run(
-        ["yt-dlp", "--list-subs", "--skip-download", "--no-warnings", url],
-        capture_output=True, text=True, encoding="utf-8",
+    stdout, stderr, rc = run_ytdlp(
+        "yt-dlp", "--list-subs", "--skip-download", "--no-warnings", url,
     )
-    output = result.stdout + result.stderr
+    output = stdout + stderr
     log.debug("yt-dlp --list-subs output:\n%s", output)
 
     manual_langs = set()
@@ -165,28 +174,25 @@ def download_subtitles(url, temp_dir):
 
     for i, (flag, lang, sub_type) in enumerate(candidates):
         log.info("  [%d/%d] Downloading %s (%s)...", i + 1, len(candidates), lang, sub_type)
-        result = subprocess.run(
-            [
-                "yt-dlp", flag,
-                "--sub-lang", lang,
-                "--skip-download",
-                "--sub-format", "vtt",
-                "--no-warnings",
-                "-o", os.path.join(temp_dir, "subs"),
-                url,
-            ],
-            capture_output=True, text=True, encoding="utf-8",
+        stdout, stderr, rc = run_ytdlp(
+            "yt-dlp", flag,
+            "--sub-lang", lang,
+            "--skip-download",
+            "--sub-format", "vtt",
+            "--no-warnings",
+            "-o", os.path.join(temp_dir, "subs"),
+            url,
         )
 
-        log.debug("yt-dlp stdout: %s", result.stdout.strip())
-        log.debug("yt-dlp stderr: %s", result.stderr.strip())
+        log.debug("yt-dlp stdout: %s", stdout.strip())
+        log.debug("yt-dlp stderr: %s", stderr.strip())
 
         vtt_files = glob.glob(os.path.join(temp_dir, "*.vtt"))
         if vtt_files:
             log.info("  Got %s subtitles", lang)
             return vtt_files[0]
 
-        error_output = (result.stderr + result.stdout).strip()
+        error_output = (stderr + stdout).strip()
         if "429" in error_output:
             log.info("  Failed: YouTube rate limit (HTTP 429). Waiting 5s...")
             time.sleep(5)
